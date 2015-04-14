@@ -1,5 +1,5 @@
-#include "Adafruit_NeoPixel.h"
-#include "specrend.h"
+#include <Adafruit_NeoPixel.h>
+#include <specrend.h>
 
 #define MIC_PIN 0 // analog pin to which the microphone is connected
 #define LED_PIN 6 // digital pin to which the LED string is connected
@@ -9,12 +9,15 @@
 #define POS_SLOPE 1
 #define NEG_SLOPE 2
 #define PEAK_FOUND 3
-#define N 256
+#define N 256  // Number of samples to take before computing frequency
 
-#define MIN_HZ 100
-#define MAX_HZ 1300
-#define MIN_TEMP 1000
-#define MAX_TEMP 10000
+#define VS 340.29         // Speed of sound (m/s)
+#define MIN_F 100         // Bottom of instrument range (Hz)
+#define MAX_F 1200        // Top of instrument range
+#define MIN_WS VS/MAX_F   // Shortest wavelength instrument can produce (m)
+#define MAX_WS VS/MIN_F   // Longest wavelength instrument can produce
+#define MIN_WL 400        // Shortest visual wavelength (nanometers)
+#define MAX_WL 730        // Longest visual wavelength
 
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = pin number (most are valid)
@@ -34,30 +37,26 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(NLED, LED_PIN, NEO_GRB + NEO_KHZ800)
 const float sample_freq = 18043;  // Found empirically.
 
 int n = 0;
-long t0 = millis();
-long sum = 0;
-long sum_old;
+int sum = 0;
+int sum_old;
 int thresh = 0;
 float freq;
 byte pd_state = 0;
-int samples[N];
-long period;
-double temp;
-double *r, *g, *b;
+char samples[N];
+int period;
+int wavelength;
+float r, g, b;
 
 void setup() {
   Serial.begin(9600);
   Serial.println("setup");
   strip.begin();
-  for (int i = 0; i < NLED; i++) {
-    strip.setPixelColor(i, 0, 255, 0);
-  }
   strip.show();  // Initialize the strip with all lights turned off.
 }
 
 void loop() {
   samples[n] = analogRead(MIC_PIN) - 62; // Neutral mic reading should be 64, but seems to be ~62.
-  if (n >= N) {
+  if (++n >= N) {
 //    Serial.print("Period for 256 samples: ");
 //    Serial.print(millis()-t0);
 //    Serial.println();
@@ -65,23 +64,26 @@ void loop() {
     n = 0;
     
     freq = frequency(samples, N);
-    temp = freq_to_temp(freq);
-   // spectrum_to_rgb(temp, r, g, b);
+    wavelength = fs_to_wl(freq);
+    wavelength_to_rgb(wavelength, &r, &g, &b);
     Serial.print(freq);
+    Serial.print(" Hz, ");
+    Serial.print(wavelength);
+    Serial.print(" nm: ");
+    Serial.print((int)(r*255));
     Serial.print(", ");
-    Serial.print(temp);
-    Serial.print(": ");
-    Serial.print((int)(*r*255.));
+    Serial.print((int)(g*255));
     Serial.print(", ");
-    Serial.print((int)(*g*255.));
-    Serial.print(", ");
-    Serial.print((int)(*b*255.));
+    Serial.print((int)(b*255));
     Serial.println();
+    for (int i=0; i < NLED; i++) {
+      strip.setPixelColor(i, (int)(r*255), (int)(g*255), (int)(b*255));
+    }
+    strip.show();
   }
-  n++;
 }
 
-float frequency(int samples[], int len) {
+float frequency(char samples[], int len) {
   // Autocorrelation on peak amplitudes.
   // www.instructables.com/id/Reliable-Frequency-Detection-Using-DSP-Techniques/
   pd_state = INITIAL;
@@ -108,13 +110,13 @@ float frequency(int samples[], int len) {
   return sample_freq/period;
 }
 
-/*  Linear conversion of a frequency to a temperature, where:
-    freq_to_temp(MIN_HZ) = MIN_TEMP
-    freq_to_temp(MAX_HZ) = MAX_TEMP
+/*  Map a sound frequency in Hz to a light wavelength in nm, where
+    hz_to_nm(MIN_F) = MAX_WL
+    hz_to_nm(MAX_F) = MIN_WL
 */
-double freq_to_temp(float f) {
-  float fRatio = (f - MIN_HZ) / (MAX_HZ - MIN_HZ);
-  return MIN_TEMP + (fRatio*(MAX_TEMP - MIN_TEMP));
+int fs_to_wl(float f) {
+  float lambda = VS / ((float)f);  // Wavelength of fundamental tone
+  return (int) (MIN_WL + ((lambda - MIN_WS) * (MAX_WL - MIN_WL) / (MAX_WS - MIN_WS)));
 }
 
 
